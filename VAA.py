@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-import backtrader as bt
 import datetime
 import dateutil
 import logging
@@ -8,6 +7,9 @@ import os
 import pandas as pd # for last business day of the month
 import subprocess
 import sys
+
+sys.path.append(os.path.join(os.path.dirname(__file__), 'backtrader.git'))
+import backtrader as bt
 
 logging.basicConfig(format='%(levelname)s %(funcName)s | %(message)s', level=logging.DEBUG)
 log = logging.getLogger()
