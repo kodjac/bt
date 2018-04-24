@@ -7,12 +7,15 @@ import os
 import pandas as pd # for last business day of the month
 import subprocess
 import sys
+from collections import namedtuple
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'backtrader.git'))
 import backtrader as bt
 
 logging.basicConfig(format='%(levelname)s %(funcName)s | %(message)s', level=logging.DEBUG)
 log = logging.getLogger()
+
+asset = namedtuple('asset', 'name, indicator, data')
 
 def dbg(func, no_cols = 4, width=130):
     log.debug('_'*width, '\n', func, '\n', type(func))
@@ -30,18 +33,10 @@ def dbg(func, no_cols = 4, width=130):
 
 
 def get_last_bussiness_days(data):
-    # dbg(data)
-    # date order is reversed only for yahoo ?!?!
     to_date = data.num2date(data.datetime[0])
     from_date = data.num2date(data.datetime[-data.buflen()+1])
-    # log.debug('from_date = {} '.format(from_date))
-    # log.debug('to_date = {} '.format(to_date))
     last_bussiness_days = [d.date() for d in pd.date_range(from_date, to_date, freq='BM')]
-    # log.debug('last business days:{}'.format(last_bussiness_days))
-    # log.debug('last business days:')
-    # [log.debug('  {}'.format(d)) for d in last_bussiness_days]
     return last_bussiness_days
-
 
 
 class FixedCommisionScheme(bt.CommInfoBase):
@@ -58,21 +53,19 @@ class FixedCommisionScheme(bt.CommInfoBase):
 
 
 class Momentum13612W(bt.Indicator):
-    # params = {'p1'
     lines = ('momentum',)
     # plotinfo(dict(plothlines=[0.0]))
 
-    def __init__(self, data):
+    def __init__(self):
         self.lookback_period = 300  # tolerance ...
         self.addminperiod(self.lookback_period)
-        self.datas[0] = data
+        log.debug('dat = {} {} '.format(self.data._name, self.data, self.datas))
 
         self.last_bussiness_days = get_last_bussiness_days(self.data)
-        super().__init__()
 
     def next(self):
         # today = self.data.num2date(self.data.datetime[0]).date()
-        # assert today in self.last_bussiness_days, 'indicator is only valid on last business day: {}'.format(today)
+        # assert today in self.last_bussiness_days, f'indicator is only valid on last business day: {today}'
 
         # gather all end-of-month indices from now on backwards
         emc_idx = [i for i in range(0, -self.lookback_period, -1) 
@@ -85,13 +78,13 @@ class Momentum13612W(bt.Indicator):
 
             if date in self.last_bussiness_days:
                 emc.append(close)
-                # log.debug('{}: {}'.format(date, close))
-        # log.debug('emc [{}] = {} '.format(len(emc), emc))
         assert len(emc) >= 13, 'not enough end-of-month closing prices found'
         p0, p1, p3, p6, p12 = emc[0], emc[1], emc[3], emc[6], emc[12]  # map for nice formula
 
         # assign the momentum value to the linebuffer
-        self.lines.momentum[0] = 12*(p0/p1 - 1) + 4*(p0/p3 - 1) + 2*(p0/p6 - 1) + (p0/p12 - 1)
+        self.lines.momentum[0] = round(
+                12*(p0/p1 - 1) + 4*(p0/p3 - 1) + 2*(p0/p6 - 1) + (p0/p12 - 1), 2)
+        # log.debug(f'{self.data._name} {self.lines.momentum[0]}')
 
 
 
@@ -106,59 +99,89 @@ class VAA(bt.Strategy):
     def log(self, txt, doprint=True):
         current_dt = self.datas[0].datetime.date(0)
         if doprint:
-            log.debug('{} {}'.format(current_dt.isoformat(), txt))
+            log.debug(f'{current_dt.isoformat()} {txt}')
 
 
     def __init__(self):
         self.order = None
-        self.equity_position = False
+        self.equity_position = None
         self.last_bussiness_days = get_last_bussiness_days(self.data)
 
         self.indicators = {}
         for dat in self.datas:
-            log.debug('adding indicator for: {}'.format(dat._name))
-            self.indicators[dat]['13612W'] = Momentum13612W(dat)
+            log.debug(f'adding indicator for: {dat._name} {dat}')
+            self.indicators[dat._name] = Momentum13612W(dat)
+
+        self.risk_assets = {}
+        self.cash_assets = {}
+        for d in self.datas:
+            this = asset(d._name, self.indicators[d._name], d)
+            if this.name in self.p.risk:
+                self.risk_assets[this.name] = this
+            elif this.name in self.p.cash:
+                self.cash_assets[this.name] = this
+
+        for key, aclass in [['risk', self.risk_assets], ['cash', self.cash_assets]]:
+            log.debug(f'{key}:')
+            [log.debug(f'  > {key}') for key in aclass]
 
     def notify_order(self, order):
         # is called for every order status change: Submitted, Accepted, Completed
         # self.order = None  # no more order, why here?
-        # log('order {}'.format(order.getstatusname()))
+        # log(f'order {order.getstatusname()}')
         if order.status == order.Completed:
             order_type = 'BUY' if order.isbuy() else 'SELL'
-            log.debug('{} order {}'.format(order_type, order.getstatusname()))
+            log.debug(f'{order_type} order {order.getstatusname()}')
             self.order = None if order.issell() else self.order
 
 
     def notify_trade(self, trade):
         # its 0 for buying
         if trade.isclosed:
-            log.debug('operation profit {:.2f} ({})'.format(trade.pnlcomm, trade.pnl))
+            log.debug(f'operation profit {trade.pnlcomm:.2f} ({trade.pnl})')
 
 
     def next(self):
-        log.debug('close {:.2f}, ({:.2f})'.format(self.dclose[0], cerebro.broker.getvalue()))
+        closes = {d._name: round(d.close[0], 2) for d in self.datas}
+        log.debug('{} close {}, ({:.2f})'.format(self.data.num2date(self.data.datetime[0]).date(),
+                closes, cerebro.broker.getvalue()))
         today = self.data.num2date(self.data.datetime[0]).date()
+
         if today in self.last_bussiness_days:
+            log.debug('_'*60)
             log.info('end of month')
-            mom = self.indicators[self.datas[0]].momentum[0]
-            log.debug('mom = {} '.format(mom))
-            mom = self.indicators[self.datas[1]].momentum[0]
-            log.debug('mom2 = {} '.format(mom2))
-            log.debug(self.equity_position)
+            for key in self.indicators.keys():
+                log.debug(f'{key}: 13612W = {self.indicators[key].momentum}')
 
-            if mom > 0.0 and not self.equity_position:
-                log.debug('>BUY')
-                self.equity_position = True # fixme dependent ...
-                self.buy()  #fixme how much
+            risk_indicators_good = {key: self.indicators[key].momentum[0] > 0.0 
+                                    for key in self.indicators.keys()}
+            # cash_indicators_good = {key: self.indicators[key].momentum[0] > 0.0 
+                                    # for key in self.indicators.keys()}
+            good = not (False in risk_indicators_good.values())  # not one of the indicators negative
+            log.debug('risk_indicators_good = {} '.format(risk_indicators_good))
+            log.debug('equity_position = {} '.format(self.equity_position))
 
-            elif mom < 0.0 and self.equity_position:
-                log.debug('>SELL')
-                self.equity_position = False # fixme dependent ...
-                self.sell()
-
+            # asset_class = self.p.risk if good else self.p.cash
+            asset_class = risk_indicators_good
+            log.debug('asset_class = {} '.format(asset_class))
+            best_asset = sorted(risk_indicators_good.items(), key=lambda x: x[1],
+                                reverse=True)[0][0]  # get highest momentum key
+            log.debug('best_asset = {} '.format(best_asset))
+            if self.equity_position == best_asset:
+                log.debug('already invested in best asset: {}'.format(self.equity_position))
+                pass # everything is fine
             else:
-                log.debug('do nothing (mom={}, position={}...'.format(mom, self.equity_position))
-
+                log.debug('not invested in best asset {} but in {}'.format(
+                          best_asset, self.equity_position))
+                if self.equity_position:  # only if already bought something
+                    log.debug(f'selling old asset {self.equity_position}')
+                    self.sell()
+                log.debug(f'buying best asset {best_asset}')
+                self.buy()
+                self.equity_position = best_asset
+            
+            # TODO create named tuple, asset(symbol, price, momentum)
+        sys.exit(0)
 
 
     def start(self):
@@ -189,7 +212,7 @@ if __name__ == '__main__':
     if not os.path.isdir(data_dir):
         os.mkdir(data_dir)
 
-    for ticker_name in ('SPY', 'AGG'):# 'EFA', 'EEM', 'AGG', 'LQD', 'IEF', 'SHY'):
+    for ticker_name in ('SPY', 'AGG', 'SHY'):# 'EFA', 'EEM', 'AGG', 'LQD', 'IEF', 'SHY'):
         # data = bt.feeds.YahooFinanceData(
                 # dataname=ticker_name,
                 # fromdate=datetime.datetime(2016, 1, 1),
@@ -209,7 +232,6 @@ if __name__ == '__main__':
                              ])
                          
         data = bt.feeds.YahooFinanceCSVData(dataname=ticker_file)
-
 
         cerebro.adddata(data, name=ticker_name)
 
