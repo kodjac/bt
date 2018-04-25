@@ -39,6 +39,7 @@ def get_last_bussiness_days(data):
     return last_bussiness_days
 
 
+# _________________________________________________________________________________________________
 class FixedCommisionScheme(bt.CommInfoBase):
     ''' This is a simple fixed commission scheme '''
     params = (
@@ -59,7 +60,6 @@ class Momentum13612W(bt.Indicator):
     def __init__(self):
         self.lookback_period = 300  # tolerance ...
         self.addminperiod(self.lookback_period)
-        log.debug('dat = {} {} '.format(self.data._name, self.data, self.datas))
 
         self.last_bussiness_days = get_last_bussiness_days(self.data)
 
@@ -88,6 +88,7 @@ class Momentum13612W(bt.Indicator):
 
 
 
+# _________________________________________________________________________________________________
 class VAA(bt.Strategy):
     params = (
               ('risk', ['SPY', 'EFA', 'EEM', 'AGG']),
@@ -109,7 +110,6 @@ class VAA(bt.Strategy):
 
         self.indicators = {}
         for dat in self.datas:
-            log.debug(f'adding indicator for: {dat._name} {dat}')
             self.indicators[dat._name] = Momentum13612W(dat)
 
         self.risk_assets = {}
@@ -142,6 +142,7 @@ class VAA(bt.Strategy):
 
 
     def next(self):
+        # asset = namedtuple('asset', 'name, indicator, data')
         closes = {d._name: round(d.close[0], 2) for d in self.datas}
         log.debug('{} close {}, ({:.2f})'.format(self.data.num2date(self.data.datetime[0]).date(),
                 closes, cerebro.broker.getvalue()))
@@ -149,39 +150,47 @@ class VAA(bt.Strategy):
 
         if today in self.last_bussiness_days:
             log.debug('_'*60)
-            log.info('end of month')
+            log.info('end of month {}'.format(today))
             for key in self.indicators.keys():
-                log.debug(f'{key}: 13612W = {self.indicators[key].momentum}')
+                log.debug(f'{key}: 13612W = {self.indicators[key].momentum[0]}')
 
-            risk_indicators_good = {key: self.indicators[key].momentum[0] > 0.0 
-                                    for key in self.indicators.keys()}
-            # cash_indicators_good = {key: self.indicators[key].momentum[0] > 0.0 
-                                    # for key in self.indicators.keys()}
-            good = not (False in risk_indicators_good.values())  # not one of the indicators negative
+            risk_indicators_good = {key: a.indicator.momentum[0] > 0.0 
+                                    for key, a in self.risk_assets.items()}
             log.debug('risk_indicators_good = {} '.format(risk_indicators_good))
-            log.debug('equity_position = {} '.format(self.equity_position))
+            cash_indicators = {key: a.indicator.momentum[0] > 0.0 
+                                    for key, a in self.cash_assets.items()}
+            log.debug('cash_indicators = {} '.format(cash_indicators))
+            good = not (False in risk_indicators_good.values())  # not one of the indicators negative
+            log.debug('good = {} '.format(good))
 
-            # asset_class = self.p.risk if good else self.p.cash
-            asset_class = risk_indicators_good
-            log.debug('asset_class = {} '.format(asset_class))
-            best_asset = sorted(risk_indicators_good.items(), key=lambda x: x[1],
+            # TODO gather all data in python class asset, modify
+            # TODO sell all shares, buy all new shares, cheat on ordering, get the order status
+            # TODO ...
+
+            asset_indicators = risk_indicators_good if good else cash_indicators
+            log.debug('asset_indicators = {} '.format(asset_indicators))
+            asset_class = self.risk_assets if good else self.cash_assets
+
+            best = sorted(asset_indicators.items(), key=lambda x: x[1],
                                 reverse=True)[0][0]  # get highest momentum key
-            log.debug('best_asset = {} '.format(best_asset))
-            if self.equity_position == best_asset:
+            best_asset = asset_class[best]
+
+            log.debug('best = {} '.format(best))
+            log.debug('equity_position = {} '.format(self.equity_position))
+            if self.equity_position == best:
                 log.debug('already invested in best asset: {}'.format(self.equity_position))
                 pass # everything is fine
             else:
                 log.debug('not invested in best asset {} but in {}'.format(
-                          best_asset, self.equity_position))
+                          best, self.equity_position))
                 if self.equity_position:  # only if already bought something
                     log.debug(f'selling old asset {self.equity_position}')
                     self.sell()
-                log.debug(f'buying best asset {best_asset}')
-                self.buy()
-                self.equity_position = best_asset
-            
-            # TODO create named tuple, asset(symbol, price, momentum)
-        sys.exit(0)
+                log.debug(f'buying best asset {best}')
+
+                number_of_shares = int(cerebro.broker.getvalue()/best_asset.data.close[0])  # int=floor
+                self.buy(best_asset.data, number_of_shares)
+                self.equity_position = best
 
 
     def start(self):
@@ -195,8 +204,10 @@ class VAA(bt.Strategy):
             len(self.params.risk), self.broker.getvalue()))
 
 
+# _________________________________________________________________________________________________
 if __name__ == '__main__':
 
+    log.info('starting workflow')
     alphavantage_key = 'HR91R8PS4P19GES7'  # flo.rieger@gmx.net
     # log.debug('_'*80)
     cerebro = bt.Cerebro()
@@ -205,6 +216,7 @@ if __name__ == '__main__':
     cerebro.addstrategy(VAA)
     # cerebro.optstrategy(VAA)
 
+    log.debug('getting the data')
     from_date = dateutil.parser.parse('2006-01-01')
     to_date = dateutil.parser.parse('2010-04-01')
 
@@ -235,8 +247,9 @@ if __name__ == '__main__':
 
         cerebro.adddata(data, name=ticker_name)
 
+    log.info('start evaluation')
     cerebro.run()
-    # cerebro.plot()
+    cerebro.plot()
 
 
 

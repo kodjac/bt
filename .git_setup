@@ -2,3 +2,4 @@
 set_proxies  # set expected environment variables (proxies)
 alias git='git -c "http.proxy=$http_proxy"'
 alias pull_submodules='git submodule foreach git -c "http.proxy=$http_proxy" pull'
+git config --local credential.helper store --file=~/.ssh/git_credential_storage
