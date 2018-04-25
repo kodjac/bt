@@ -3,3 +3,5 @@ backtrader
 *.swp
 *~
 tmp
+VAA_data
+__pycache__

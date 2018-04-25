@@ -1,4 +1,4 @@
 # source this file: source .git_setup
+set_proxies  # set expected environment variables (proxies)
 alias git='git -c "http.proxy=$http_proxy"'
 alias pull_submodules='git submodule foreach git -c "http.proxy=$http_proxy" pull'
-set_proxies  # expected in environment
