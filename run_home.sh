@@ -1,1 +1,1 @@
-clear; python VAA.py
+reset; clear; python VAA.py

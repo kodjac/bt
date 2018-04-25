@@ -15,7 +15,7 @@ import backtrader as bt
 logging.basicConfig(format='%(levelname)s %(funcName)s | %(message)s', level=logging.DEBUG)
 log = logging.getLogger()
 
-asset = namedtuple('asset', 'name, indicator, data')
+asset = namedtuple('asset', 'name, indicator, data, idx')
 
 def dbg(func, no_cols = 4, width=130):
     log.debug('_'*width, '\n', func, '\n', type(func))
@@ -40,11 +40,9 @@ def get_last_bussiness_days(data):
 
 
 # _________________________________________________________________________________________________
-class FixedCommisionScheme(bt.CommInfoBase):
-    ''' This is a simple fixed commission scheme '''
+class FixedCommissionScheme(bt.CommInfoBase):
     params = (
         ('commission', 6.5),
-        # ('commission', 0.0),
         ('stocklike', True),
         ('commtype', bt.CommInfoBase.COMM_FIXED),
         )
@@ -96,16 +94,8 @@ class VAA(bt.Strategy):
               ('lazytrade', False),
              )
 
-
-    def log(self, txt, doprint=True):
-        current_dt = self.datas[0].datetime.date(0)
-        if doprint:
-            log.debug(f'{current_dt.isoformat()} {txt}')
-
-
     def __init__(self):
         self.order = None
-        self.equity_position = None
         self.last_bussiness_days = get_last_bussiness_days(self.data)
 
         self.indicators = {}
@@ -114,8 +104,8 @@ class VAA(bt.Strategy):
 
         self.risk_assets = {}
         self.cash_assets = {}
-        for d in self.datas:
-            this = asset(d._name, self.indicators[d._name], d)
+        for idx, d in enumerate(self.datas):
+            this = asset(d._name, self.indicators[d._name], d, idx)
             if this.name in self.p.risk:
                 self.risk_assets[this.name] = this
             elif this.name in self.p.cash:
@@ -125,58 +115,74 @@ class VAA(bt.Strategy):
             log.debug(f'{key}:')
             [log.debug(f'  > {key}') for key in aclass]
 
+    @property
+    def today(self):
+        return self.data.num2date(self.data.datetime[0]).date()
+
+    @property
+    def value(self):
+        cerebro.broker.getvalue()
+
+    @property
+    def equity_position(self):
+        positions = [key for key, pos in self.positions.items() if pos.size > 0]
+        return positions[0] if positions else None
+
     def notify_order(self, order):
         # is called for every order status change: Submitted, Accepted, Completed
         # self.order = None  # no more order, why here?
         # log(f'order {order.getstatusname()}')
         if order.status == order.Completed:
             order_type = 'BUY' if order.isbuy() else 'SELL'
-            log.debug(f'{order_type} order {order.getstatusname()}')
+            log.debug(f'{self.today} {order_type} order {order.getstatusname()}')
+            log.debug('  price={0.price} value={0.value} commision={0.comm}'.format(order.executed))
             self.order = None if order.issell() else self.order
 
 
     def notify_trade(self, trade):
-        # its 0 for buying
         if trade.isclosed:
-            log.debug(f'operation profit {trade.pnlcomm:.2f} ({trade.pnl})')
+            log.debug(f'{self.today} operation profit {trade.pnlcomm:.2f} ({trade.pnl})')
+            log.debug(f'  commission={trade.commission} size={trade.size}')
 
 
     def next(self):
         # asset = namedtuple('asset', 'name, indicator, data')
         closes = {d._name: round(d.close[0], 2) for d in self.datas}
-        log.debug('{} close {}, ({:.2f})'.format(self.data.num2date(self.data.datetime[0]).date(),
-                closes, cerebro.broker.getvalue()))
-        today = self.data.num2date(self.data.datetime[0]).date()
+        log.debug('{} close {}, ({:.2f})'.format(self.today, closes, cerebro.broker.getvalue()))
 
-        if today in self.last_bussiness_days:
+        positions = {data._name: self.getposition(data) for data in self.datas}
+        [log.debug('position {0}: size={1.size} price={1.price}'.format(key, p))
+            for key, p in positions.items()
+            if p.size > 0]
+
+        if self.today in self.last_bussiness_days:
             log.debug('_'*60)
-            log.info('end of month {}'.format(today))
-            for key in self.indicators.keys():
-                log.debug(f'{key}: 13612W = {self.indicators[key].momentum[0]}')
+            log.info('end of month {}'.format(self.today))
+            log.debug({key: indicator.momentum[0] for key, indicator in self.indicators.items()})
 
             risk_indicators_good = {key: a.indicator.momentum[0] > 0.0 
                                     for key, a in self.risk_assets.items()}
-            log.debug('risk_indicators_good = {} '.format(risk_indicators_good))
+            # log.debug('risk_indicators_good = {} '.format(risk_indicators_good))
             cash_indicators = {key: a.indicator.momentum[0] > 0.0 
                                     for key, a in self.cash_assets.items()}
-            log.debug('cash_indicators = {} '.format(cash_indicators))
+            # log.debug('cash_indicators = {} '.format(cash_indicators))
             good = not (False in risk_indicators_good.values())  # not one of the indicators negative
-            log.debug('good = {} '.format(good))
+            # log.debug('good = {} '.format(good))
 
             # TODO gather all data in python class asset, modify
             # TODO sell all shares, buy all new shares, cheat on ordering, get the order status
             # TODO ...
 
             asset_indicators = risk_indicators_good if good else cash_indicators
-            log.debug('asset_indicators = {} '.format(asset_indicators))
+            # log.debug('asset_indicators = {} '.format(asset_indicators))
             asset_class = self.risk_assets if good else self.cash_assets
 
             best = sorted(asset_indicators.items(), key=lambda x: x[1],
                                 reverse=True)[0][0]  # get highest momentum key
             best_asset = asset_class[best]
 
-            log.debug('best = {} '.format(best))
-            log.debug('equity_position = {} '.format(self.equity_position))
+            log.debug('best = {} ({})'.format(best, 'risk' if good else 'cash'))
+            log.debug(f'equity_position = {self.equity_position}')
             if self.equity_position == best:
                 log.debug('already invested in best asset: {}'.format(self.equity_position))
                 pass # everything is fine
@@ -185,12 +191,14 @@ class VAA(bt.Strategy):
                           best, self.equity_position))
                 if self.equity_position:  # only if already bought something
                     log.debug(f'selling old asset {self.equity_position}')
-                    self.sell()
+                    self.close()
                 log.debug(f'buying best asset {best}')
 
-                number_of_shares = int(cerebro.broker.getvalue()/best_asset.data.close[0])  # int=floor
-                self.buy(best_asset.data, number_of_shares)
-                self.equity_position = best
+                number_of_shares = int((cerebro.broker.getvalue() - 15)/best_asset.data.close[0]) - 10
+                log.debug('number_of_shares = {} '.format(number_of_shares))
+                # number_of_shares = 10
+                # self.buy(self.datas[best_asset.idx], number_of_shares)
+                self.buy(self.datas[best_asset.idx], number_of_shares)
 
 
     def start(self):
@@ -212,25 +220,19 @@ if __name__ == '__main__':
     # log.debug('_'*80)
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(5500)
-    cerebro.broker.addcommissioninfo(FixedCommisionScheme())
+    cerebro.broker.addcommissioninfo(FixedCommissionScheme(commission=6.5))
     cerebro.addstrategy(VAA)
     # cerebro.optstrategy(VAA)
 
     log.debug('getting the data')
     from_date = dateutil.parser.parse('2006-01-01')
-    to_date = dateutil.parser.parse('2010-04-01')
+    to_date = dateutil.parser.parse('2007-08-01')
 
-    data_dir = 'VAA_data'
+    data_dir = 'data'
     if not os.path.isdir(data_dir):
         os.mkdir(data_dir)
 
     for ticker_name in ('SPY', 'AGG', 'SHY'):# 'EFA', 'EEM', 'AGG', 'LQD', 'IEF', 'SHY'):
-        # data = bt.feeds.YahooFinanceData(
-                # dataname=ticker_name,
-                # fromdate=datetime.datetime(2016, 1, 1),
-                # todate=datetime.datetime(2017, 12, 31),
-                # )
-        # python yahoodownload.py --ticker EFA --fromdate 2000-01-01 --todate 2017-12-30 --outfile ~/bt/efa.dat
         ticker_file = '{}/{}.dat'.format(data_dir, ticker_name)
         log.debug('ticker_file = {} '.format(ticker_file))
 
@@ -242,8 +244,10 @@ if __name__ == '__main__':
                              '--todate', str(to_date.date()),
                              '--outfile', ticker_file,
                              ])
+            subprocess.call(['python', 'fix_yahoo.py', ticker_file])
                          
         data = bt.feeds.YahooFinanceCSVData(dataname=ticker_file)
+        # todo https://community.backtrader.com/topic/516/yahoofinancedata-gets-displayed-invalid-due-to-changed-adjusted-close/4
 
         cerebro.adddata(data, name=ticker_name)
 
