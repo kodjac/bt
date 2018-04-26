@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 logging.basicConfig(format='%(levelname)s %(funcName)s | %(message)s', level=logging.DEBUG)
 log = logging.getLogger()
 
+# _________________________________________________________________________________________________
 class DateSync():
     '''to ontrol date in all asset classes at once'''
     def __init__(self, date:pd.Timestamp):
@@ -15,6 +16,8 @@ class DateSync():
 #       index=dates 
 #       columns=Open, High, Low, Close, Volume
 
+
+# _________________________________________________________________________________________________
 class Asset():
     def __init__(self, name:str, data:pd.DataFrae, date:DataSync):
         self.name = name
@@ -39,11 +42,12 @@ class Asset():
         return 0
 
 
+# _________________________________________________________________________________________________
 class Position():
     def __init__(self, asset:Asset, amount:int, commission=6.5, close=True):
         self.asset = asset
         self.amount = amount
-        self.commission = commission
+        self.commission = commission  # commission for buy/sell operations
         self.buy_date = asset.today
         self.buy_price = asset.close if close else asset.open
         self.sell_date = None
@@ -63,31 +67,55 @@ class Position():
         if self.sell_price:
             return self.amount*(self.sell_price - self.buy_price) - self.commission
         else:
-            log.warning('position on {self.asset.name} is still open, no actual profit')
+            log.warning(f'position on {self.asset.name} is still open, no actual profit')
             return self.amount*(self.asset.close - self.buy_price) - self.commission*2
 
     def sell(self, close=True):
         self.sell_date = self.asset.today
         self.sell_price = self.asset.close if close else self.asset.open
-        self.commission *= 2  # assumes same commission for buy/sell
 
 
+# _________________________________________________________________________________________________
 class Strategy():
     def __init__(self, cash, assets:list, date:DataSync):
         self.assets = {a.name: a for a in assets}  # dict of Asset objects
-        self.
         self.date = date  # DataSync object
+        self.cash = cash
         [a.date = self.date for a in assets]  # sync all assets date
-        self.positions = []  # todo how to handle this
+        self._positions = []
 
     @property
     def value(self):
         return self.cash + [active position values]
 
+    @property
+    def positions(self):
+        return [p for p in self._positions if p.active]
+
+    @property
+    def closed_positions(self):
+        return [p for p in self._positions if not p.active]
+
+    def buy_position(self, position): 
+        if position.amount * buy_price + position.commission < self.cash:
+            self._positions.append(position)
+            self.cash -= position.value + position.commission
+            return position
+        else:
+            log.warning(f'cannot buy position for {position.asset.name}')
+
+    def sell_position(self, position):
+        if position.active:
+            position.sell()
+            self.cash += position.value - position.commission
+        else:
+            log.error('cannot sell inactive position on {position.asset.name}')
+
     def execute(self, date):
-        pass 
+        pass   # logic here
 
 
+# _________________________________________________________________________________________________
 class VAA_Strategy(Strategy):
     def __init__(self, assets:list, date:DataSync):
         super().__init__(assets, date)
@@ -97,6 +125,7 @@ class VAA_Strategy(Strategy):
     def execute(self, date):
 
 
+# _________________________________________________________________________________________________
 if __name__ == '__main__':
     # todo define assets from files
     # todo strategy object
@@ -104,6 +133,8 @@ if __name__ == '__main__':
     start_date = VAA.assets.items()[0].data[idx0] + 13 months
     for date in panda.timeframe
 
+    # buy: create position and try to buy it
+    # sell: 
 
 
 
