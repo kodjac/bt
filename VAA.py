@@ -225,8 +225,6 @@ if __name__ == '__main__':
     # cerebro.optstrategy(VAA)
 
     log.debug('getting the data')
-    from_date = dateutil.parser.parse('2006-01-01')
-    to_date = dateutil.parser.parse('2007-08-01')
 
     data_dir = 'data'
     if not os.path.isdir(data_dir):
