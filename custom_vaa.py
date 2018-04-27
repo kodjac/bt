@@ -45,7 +45,7 @@ class Asset():
         return [d.date() for d in pd.date_range(data_start_date, data_end_date, freq='BM')]
 
     @property
-    def indicator_13612W(self):
+    def i_13612W(self):
         # todo get closest last_bussiness_day
         # assume only called on a last_bussiness_day
         start_idx = self.last_bussiness_days.index(self.today)
@@ -156,12 +156,15 @@ if __name__ == '__main__':
     log.debug('start_date = {} '.format(start_date))
     date = DateSync(start_date)
 
-    # todo define assets from files
+    # read and define assets from data files
+    # todo assert data files are present
+    # df.rename(index=str, columns={"A": "a", "B": "c"})
     assets = ['SPY', 'AGG', 'SHY']  # list of names
     assets = [Asset(a, read_yahoo_csv(f'data/{a}.dat'), date) for a in assets]  # read the data
 
-    # todo strategy object
+    # create strategy object
     strategy = VAA_Strategy(assets, date)
+    strategy.cash = 10e3  # starting money
     # start_date = VAA.assets.items()[0].data[idx0] + 13 months  # pre-run time for indicator
 
     # todo main loop
@@ -171,10 +174,18 @@ if __name__ == '__main__':
         date.date = day  # update all dates
         log.debug(f'day = {day}')
 
-        agg = strategy.assets['AGG']
+        # gather indicators
+        risk_indicators = np.array([strategy.assets[a].i_13612W for a in strategy.risk_assets])
+        cash_indicators = np.array([strategy.assets[a].i_13612W for a in strategy.cash_assets])
 
-        strategy.assets['AGG'].indicator_13612W
-        log.debug(strategy.assets['AGG'].indicator_13612W)
+        good = bool([i for i in risk_indicators if i > 0.0])
+        g_str = 'good' if good else 'bad'
+        log.debug(f'indicators: risk={risk_indicators}>{g_str}, cash={cash_indicators}')
+
+        if good
+
+
+        sys.exit(0)
 
 
     # buy: create position and try to buy it
