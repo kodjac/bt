@@ -1,1 +1,1 @@
-reset; clear; python custom_vaa.py
+reset; clear; ipython3 -i vaa.py
