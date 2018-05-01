@@ -4,8 +4,10 @@ import numpy as np
 import os
 import time
 import pandas as pd
+import requests
 import subprocess
 import sys
+from alpha_vantage.timeseries import TimeSeries
 # https://pandas.pydata.org/pandas-docs/stable/10min.html
 
 start_time = time.time()
@@ -78,7 +80,7 @@ class Asset():
         p0, p1, p3, p6, p12 = emc[0], emc[1], emc[3], emc[6], emc[12]  # map for nice formula
 
         # assign the momentum value to the linebuffer
-        return round((12*(p0/p1 - 1) + 4*(p0/p3 - 1) + 2*(p0/p6 - 1) + (p0/p12 - 1))*10, 1)
+        return round((12*(p0/p1 - 1) + 4*(p0/p3 - 1) + 2*(p0/p6 - 1) + (p0/p12 - 1))*10, 0)
 
 
 # _________________________________________________________________________________________________
@@ -185,7 +187,7 @@ class Strategy():
 
         position._sell()
         self.cash += position.value - position.commission
-        # self.cash += (position.value - position.buy_price*position.amount)*0.75 + position.value - position.commission
+        # self.cash += (position.value - position.buy_price*position.amount)*0.75 + position.buy_price*position.amount - position.commission
         log.info(f'sold position {position.asset.name} profit {position.profit:.2f}')
 
     def execute(self, date):
@@ -194,15 +196,16 @@ class Strategy():
 
 # _________________________________________________________________________________________________
 class VAA_Strategy(Strategy):
-    risk_assets = ['SPY', 'EFA', 'EEM', 'LQD']
-    cash_assets = ['SHY', 'IEF', 'TLT'] # 'GLD']
-    # risk_assets = ['EXSA',  # iShares EuroStoxx 600 DE0002635307
-                   # 'LYPS',  # Lyxor S&P 500 LU0496786574
+    risk_assets = ['SPY', 'EFA', 'EEM', 'AGG']
+    # risk_assets = ['VOO', 'VEA', 'VWO', 'BND']  # LQD or AGG
+    cash_assets = ['SHY', 'IEF', 'TLT', ] # 'GLD']
+    # risk_assets = [#'EXSA',  # iShares EuroStoxx 600 DE0002635307
+                   #'LYPS',  # Lyxor S&P 500 LU0496786574
                    # 'X014',  # ComStage MSCI Pacific TRN LU0392495023
                    # 'LYM7',  # Lyxor MSCI Emerging Markets FR0010429068
                    # 'AGG' # 'EUN4',  # iShares Euro Aggregate Bond IE00B3DKXQ41
                   # ]
-    # cash_assets = ['SHY',
+    # cash_assets = [#'SHY',
                    # 'EUN5',  # iShares Core Euro Corporate Bond IE00B3F81R35
                    # 'IS0Y',  # iShares Euro Corporate Bond Interest Rate Hedged IE00B6X2VY59
                    # 'IBCA',  # iShares Euro Government Bond 1-3yr IE00B14X4Q57
@@ -227,13 +230,14 @@ def read_csv(file_path):
 # _________________________________________________________________________________________________
 # _________________________________________________________________________________________________
 if __name__ == '__main__':
+    alphavantage_key = 'HR91R8PS4P19GES7'  # flo.rieger@gmx.net
 
     data_start = pd.to_datetime('1999-01-01')
     data_end = pd.to_datetime('2018-04-10')
     cash_start = 10e3
-    # start_date = pd.to_datetime('2015-01-01')
-    start_date = None
-    saving = 400
+    start_date = pd.to_datetime('2010-01-01')
+    # start_date = None
+    saving_monthly = 0
 
     asset_tickers = VAA_Strategy.risk_assets + VAA_Strategy.cash_assets
 
@@ -245,23 +249,26 @@ if __name__ == '__main__':
         os.mkdir(data_dir)
 
     assets = []
+    ts = TimeSeries(key=alphavantage_key, output_format='pandas')
+
     for ticker_name in asset_tickers:
         ticker_file = '{}/{}.dat'.format(data_dir, ticker_name)
 
         if not os.path.isfile(ticker_file):  # get data if not available
-            log.info(f'downloading {ticker_file}')
-            subprocess.call(['python',
-                             './backtrader.git/tools/yahoodownload.py',
-                             '--ticker', ticker_name,
-                             '--fromdate', str(data_start.date()),
-                             '--todate', str(data_end.date()),
-                             '--outfile', ticker_file,
-                             ])
+            data, meta_data = ts.get_daily_adjusted(symbol=ticker_name, outputsize='full')
+            data.to_json(ticker_file)
         else:
             log.debug(f'using available ticker file {ticker_file}')
 
-        asset = Asset(ticker_name, read_csv(ticker_file), date)  # create asset object
-        asset.data.columns = [c.lower() for c in asset.data.columns]  # make headers lower-case
+        # print(d.tail(1))
+        # sys.exit(0)
+        asset = Asset(ticker_name, pd.read_json(ticker_file), date)  # create asset object
+        # asset.data.columns = ['_'.join(c.split()[1:]).lower() for c in asset.data.columns]  # make headers lower-case
+        print(f'original columns: {asset.data.columns}')
+        asset.data.columns = ['open', 'high', 'low', 'unadjusted_close', 'close', 'volume', 'dividend_amount', 'split_coefficient']
+        print(f'renamed columns: {asset.data.columns}')
+        # ass
+        # sys.exit(0)
         assets.append(asset)
                          
     latest_asset = max(assets, key=lambda a: a.data.index[0])  # starts the latest
@@ -282,8 +289,8 @@ if __name__ == '__main__':
         strategy.status(log.debug)
         date.date = day  # update all dates
 
-        log.info(f'savings: {saving}')
-        strategy.cash += saving
+        log.info(f'savings: {saving_monthly}')
+        strategy.cash += saving_monthly
 
         # gather indicators
         risk_indicators = {strategy.assets[a].name: strategy.assets[a].i_13612W 
@@ -316,8 +323,8 @@ if __name__ == '__main__':
         
         if not strategy.positions:  # either we're still in the best position or sold the old one
             amount = int((strategy.cash-Position.commission)/strategy.assets[best_asset].close)
-            if not best_asset in ['SHY',]:
-                strategy.buy_position(best_asset, amount)
+            # if not best_asset in ['SHY',]:
+            strategy.buy_position(best_asset, amount)
 
         strategy.high = max(strategy.value, strategy.high)
         strategy.maxDD = max((strategy.high - strategy.value)/strategy.high*100, strategy.maxDD)
@@ -343,7 +350,7 @@ if __name__ == '__main__':
     log.info(f'risk           {", ".join(strategy.risk_assets)}')
     log.info(f'cash           {", ".join(strategy.cash_assets)}')
     log.info('----------------------------------------------------')
-    log.info(f'start value    {cash_start:.0f}')
+    log.info(f'start value    {cash_start:.0f} {start.date()}')
     log.info(f'final value    {cash_end:.0f} {(cash_end/cash_start-1)*100:+.0f}%')
     log.info('----------------------------------------------------')
     log.info(f'CAGR           {CAGR:.2f}%')
