@@ -1,6 +1,7 @@
 backtrader.git
 backtrader
 alpha_vantage
+data
 *.swp
 *~
 tmp
