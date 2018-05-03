@@ -14,7 +14,6 @@ start_time = time.time()
 
 # logging.basicConfig(format='%(levelname)s %(funcName)s | %(message)s', level=logging.DEBUG)
 logging.basicConfig(format='  %(message)s', level=logging.DEBUG)
-# logging.basicConfig(format='  %(message)s', level=logging.INFO)
 log = logging.getLogger()
 
 # _________________________________________________________________________________________________
@@ -84,7 +83,7 @@ class Asset():
         p0, p1, p3, p6, p12 = emc[0], emc[1], emc[3], emc[6], emc[12]  # map for nice formula
 
         # assign the momentum value to the linebuffer
-        return round((12*(p0/p1 - 1) + 4*(p0/p3 - 1) + 2*(p0/p6 - 1) + (p0/p12 - 1))*10, 0)
+        return (12*(p0/p1 - 1) + 4*(p0/p3 - 1) + 2*(p0/p6 - 1) + (p0/p12 - 1))*100
 
 
 # _________________________________________________________________________________________________
@@ -221,6 +220,7 @@ class Strategy():
 # _________________________________________________________________________________________________
 class VAA_Strategy(Strategy):
     # _____________________________________________________________________________________________
+    ignore_risk = []
     # standard
     # risk_assets = ['SPY', 'EFA', 'EEM', 'AGG']
     risk_assets = ['SPY', 'EFA', 'EEM', 'LQD'] # better performance ...
@@ -255,13 +255,18 @@ class VAA_Strategy(Strategy):
                    # # 'EUN8',  # iShares Euro Government Bond 10-15yr IE00B4WXJH41
                   # ]
     # cash_assets = ['SHY', 'LQD', 'IEF', 'TLT', 'HYG', 'BNDX', 'EMB']
-    risk_assets = ['SPY', 'EFA', 'EEM', 'LQD'] # better performance ...
+    risk_assets = ['SPY', 'EFA', 'EEM', 'LQD', 'AGG'] # better performance ...
     ignore_risk = ['EZU', 'QQQ', 'IWM']
+    cash_assets = ['SHY', 'IEF', 'TLT'] 
+    # ignore_risk = ['QQQ', 'IWM', 'EPP', 'EZU']
 
-    risk_assets = ['SSO', 'EFO', 'EET', 'LQD']  # leveraged x2, x3 is a bad idea
-    ignore_risk = ['UPV', 'QLD', 'UWM']
-    cash_assets = ['SHY', 'UST', 'UBT']
+    # risk_assets = ['QLD', 'EET', 'LQD']  # leveraged x2, x3 is a bad idea
+    # ignore_risk = ['SSO', 'EFO', 'EET', 'LQD']  # leveraged x2, x3 is a bad idea
+    # ignore_risk = ['QLD']
     # cash_assets = ['SHY', 'UST', ]
+    # cash_assets = ['SHY', 'UST', 'UBT']
+
+
     risk_assets += ignore_risk
 
     def __init__(self, cash, assets:list, date:DateSync):
@@ -284,8 +289,8 @@ if __name__ == '__main__':
     data_start = pd.to_datetime('1999-01-01')
     # data_end = pd.to_datetime('2018-04-10')
     cash_start = 10e3
-    custom_start_date = pd.to_datetime('2010-01-01')
-    # custom_end_date = pd.to_datetime('2013-01-01')
+    custom_start_date = pd.to_datetime('2009-01-01')
+    # custom_end_date = pd.to_datetime('2012-01-01')
     try:
         start_date = custom_start_date
     except:
@@ -329,17 +334,24 @@ if __name__ == '__main__':
     latest_asset = max(assets, key=lambda a: a.data.index[0])  # starts the latest
     ultimo = pd.DataFrame(index=latest_asset.last_bussiness_days)  # for bool slicing
     start = start_date if start_date else latest_asset.data.index[0]
+    log.debug('start = {} '.format(start))
     end = end_date if end_date else latest_asset.data.index[-1]
     last_bussiness_days = ultimo[ultimo.index > start]
     latest_start = last_bussiness_days.index[12]
+    # assert latest_start < start, f'cannot start from {start.date()} but only from {latest_asset.data.index[0]}'
+    log.debug('latest_start = {} '.format(latest_start))
     last_bussiness_days = last_bussiness_days[12:]
     date.date = latest_start
 
     # create strategy object
     strategy = VAA_Strategy(cash_start, assets, date)  # start money
 
+    duration = 0
+    start = None
 
     for idx, day in enumerate(last_bussiness_days.index):
+        start = day if not start else start
+
         if end_date and day > end_date:
             break
         log.debug('_'*100)
@@ -370,6 +382,9 @@ if __name__ == '__main__':
             asset_class = cash_indicators
 
         best_asset = max(asset_class, key=lambda k: asset_class[k])  # in respective class
+        if best_asset in ['LQD', 'AGG']:
+            best_asset = max(cash_indicators, key=lambda k: cash_indicators[k])  # in respective class
+
         log.debug(f'best_asset = {best_asset} ')
 
         # ensure old position is the best or sell it
@@ -382,8 +397,8 @@ if __name__ == '__main__':
         
         if not strategy.positions:  # either we're still in the best position or sold the old one
             amount = int((strategy.cash-Position.commission)/strategy.assets[best_asset].close)
-            if not best_asset in ['LQD']:
-                strategy.buy_position(best_asset, amount)
+            # if not best_asset in ['LQD']:
+            strategy.buy_position(best_asset, amount)
 
         strategy.high = max(strategy.value, strategy.high)
         strategy.maxDD = max((strategy.high - strategy.value)/strategy.high*100, strategy.maxDD)
@@ -393,40 +408,40 @@ if __name__ == '__main__':
             # sys.exit(0)
             # strategy.plotdata
         strategy.status()
-        
-        # # stop-loss
-        # # actually a end-of-day stop loss ...
-        # loss_percent=0.90
-        # # pos = strategy.positions[-1]
-        # # dat = pos.asset.data
-        # dat = strategy.assets[best_asset].data
-        # start_tp = day
-        # start_tp_idx = dat.index.get_loc(day)
-        # end_tp = last_bussiness_days.index[min(idx+1, len(last_bussiness_days)-1)] 
-        # end_tp_idx = dat.index.get_loc(end_tp)
-        # # strategy.sell_position(strategy.positions[-1])
-        # for idx, close in enumerate(dat.loc[start_tp:end_tp, 'close']):
-            # date.date = dat.index[start_tp_idx + idx]  # update all dates
-            # # if close < loss_percent * pos.buy_price:
-                # # end_price = dat.loc[end_tp, 'close']
-                # # min_price = min(dat.loc[start_tp:end_tp, 'close'])
-                # # print(f'stop-loss after {idx} days ({loss_percent}%) : buy={pos.buy_price} SL={close} end={end_price}')
-                # # loss_actual = close - pos.buy_price
-                # # loss_possible = end_price - pos.buy_price
-                # # profit = (loss_actual - loss_possible)*pos.amount/strategy.value
-                # # # print(f'actual loss {loss_actual:.2f} possible loss {loss_possible:.2f}')
-                # # verdict = 'GOOD' if close > end_price else 'BAD'
-                # # print('{} {:.2f}'.format(verdict, profit))
-                # # # strategy.sell_position(strategy.positions[-1])
-                # # strategy.stop_losses.append((verdict, profit))
-                # # break
-            # if  idx == 15 and best_asset in strategy.risk_assets:
-                # amount = int((strategy.cash-Position.commission)/strategy.assets[best_asset].close)
-                # if strategy.positions:
-                    # strategy.sell_position(strategy.positions[-1])
 
-                # strategy.buy_position(strategy.assets[best_asset].name, amount)
-        # strategy.status()
+        # pos = strategy.positions[-1]
+        # dat = pos.asset.data
+        # end_tp = last_bussiness_days.index[min(idx+1, len(last_bussiness_days)-1)] 
+        # max_price = max(dat.loc[day:end_tp, 'close'])
+        # end_price = dat.loc[end_tp, 'close']
+        # log.warning(f'{pos.buy_price}, {max_price}, {end_price} {end_price/pos.buy_price*100-100:.0f}')
+        
+        # inner month trading ...
+        # actually a end-of-day stop loss ...
+        loss_percent=0.95
+        pos = strategy.positions[-1]
+        dat = pos.asset.data
+        end_tp = last_bussiness_days.index[min(idx+1, len(last_bussiness_days)-1)] 
+        closes = dat.loc[day:end_tp, 'close']
+        # for idx, close in enumerate(closes):
+            # max_close = max(closes[:idx]) if not closes[:idx].empty else 1
+            # if close < loss_percent * max_close:
+                # end_price = dat.loc[end_tp, 'close']
+                # print(f'stop-loss after {idx} days ({loss_percent}%) : buy={pos.buy_price} SL={close} end={end_price}')
+                # gain_actual = close - pos.buy_price
+                # gain_possible = end_price - pos.buy_price
+                # profit = (gain_actual - gain_possible)*pos.amount/strategy.value
+                # # print(f'actual loss {loss_actual:.2f} possible loss {loss_possible:.2f}')
+                # verdict = 'GOOD' if close > end_price else 'BAD'
+                # # print('{} {:.2f}'.format(verdict, profit))
+                # strategy.sell_position(strategy.positions[-1])
+                # # strategy.stop_losses.append((verdict, profit))
+                # break
+
+        strategy.status()
+        # sys.exit(0)
+
+    duration = idx/12  # trading months /12
 
 
     if strategy.positions: # sell at end of time
@@ -435,7 +450,6 @@ if __name__ == '__main__':
     strategy.status()
     cash_end = strategy.cash
 
-    duration = len(last_bussiness_days)/12
     log.debug(f'duration {duration} years')
     CAGR = ((cash_end/cash_start)**(1/duration)-1)*100
 
@@ -458,16 +472,16 @@ if __name__ == '__main__':
         all_positions = [f'{int(p.profit)}/{int(p.profit_percent)}%' for p in asset._positions]
         log.info(f'  {asset.name}: {sum(p.profit for p in asset._positions):.0f}: {all_positions}')
 
-    log.info('stop-losses {sum(p for v, p in strategy.stop_losses)}:')
-    [log.info(f'  {v}: {p}') for v, p in strategy.stop_losses]
+    # log.info('stop-losses {sum(p for v, p in strategy.stop_losses)}:')
+    # [log.info(f'  {v}: {p}') for v, p in strategy.stop_losses]
     # strategy.plotdata.plot()
-    # d = strategy.plotdata
-    # d.loc[:, ['value'] + VAA_Strategy.risk_assets + VAA_Strategy.cash_assets].plot()
-    # plt.yscale('log')
-    # plt.ylim(cash_start*0.9, strategy.cash*1.1)
+    d = strategy.plotdata
+    d.loc[:, ['value'] + VAA_Strategy.risk_assets + VAA_Strategy.cash_assets].plot()
+    plt.yscale('log')
+    plt.ylim(cash_start*0.9, strategy.cash*1.1)
     log.info('time in secs {:.2f}'.format(time.time()-start_time))
     # d.loc[:, 'maxDD'].plot()
-    # plt.show()
+    plt.show()
 
 
 
