@@ -260,13 +260,10 @@ class VAA_Strategy(Strategy):
                    # 'IBCL',  # iShares Euro Government Bond 15-30yr IE00B1FZS913
                    # # 'EUN8',  # iShares Euro Government Bond 10-15yr IE00B4WXJH41
                   # ]
-    # cash_assets = ['SHY', 'LQD', 'IEF', 'TLT', 'HYG', 'BNDX', 'EMB']
-    risk_assets = ['AGG', 'SPY']
-    # ignore_indicator = ['SPY', 'EFA', 'EEM', ]
-    ignore_indicator = ['SPY', 'EFA', 'EEM', 'EZU', 'QQQ', 'IWM']
-    ignore_indicator = ['EZU', 'QQQ', 'IWM']
-    cash_assets = ['SHY']
-    # cash_assets = ['SHY', 'IEF', 'TLT']
+    risk_assets = ['AGG', 'EFA', 'EEM', 'SPY']
+    ignore_indicator = ['QQQ', 'IWM']
+    cash_assets = ['IEF', 'TLT']
+    # cash_assets = ['SHY']
     # ignore_indicator = ['QQQ', 'IWM', 'EPP', 'EZU']
 
     # risk_assets = ['QLD', 'EET', 'LQD']  # leveraged x2, x3 is a bad idea
@@ -296,7 +293,7 @@ if __name__ == '__main__':
     data_start = pd.to_datetime('1999-01-01')
     # data_end = pd.to_datetime('2018-04-10')
     cash_start = 10e3
-    # custom_start_date = pd.to_datetime('2009-01-01')
+    custom_start_date = pd.to_datetime('2014-01-01')
     # custom_end_date = pd.to_datetime('2012-01-01')
     try:
         start_date = custom_start_date
@@ -362,7 +359,7 @@ if __name__ == '__main__':
         if end_date and day > end_date:
             break
         log.debug('_'*100)
-        # log.debug(f'last trading day: {day}')
+        log.debug(f'last trading day: {day}')
         # strategy.status(log.debug)
         date.date = day  # update all dates
 
@@ -370,7 +367,7 @@ if __name__ == '__main__':
         strategy.cash += saving_monthly
 
         # gather indicators
-        indicator = 1
+        indicator = 2
         if  indicator == 1:
             risk_indicators = {strategy.assets[a].name: strategy.assets[a].i_13612W 
                                for a in strategy.risk_assets}
@@ -382,7 +379,6 @@ if __name__ == '__main__':
                                for a in strategy.risk_assets}
             cash_indicators = {strategy.assets[a].name: strategy.assets[a].i_momentum(3)
                                for a in strategy.cash_assets}
-
 
         bad_indicator = {key:i for key, i in risk_indicators.items() if i < 0.0}
         bad_indicator = {key:i for key, i in risk_indicators.items() if i < 0.0 and not key in strategy.ignore_indicator}
@@ -408,14 +404,16 @@ if __name__ == '__main__':
 
             profits.append((name, profit))
 
-        if not good and risk_indicators['AGG'] < 0:
-            log.debug(f'indicators RISK: {", ".join([f"{k:5s} {v:3.0f}" for k,v in risk_indicators.items()])} > {g_str}')
-            log.debug(f'returns    RISK: {", ".join([f"{k:5s} {v:3.0f}" for k,v in profits if k in risk_assets])}')
+        log.debug(f'indicators RISK: {", ".join([f"{k:5s} {v:3.0f}" for k,v in risk_indicators.items()])} > {g_str} > {best_asset}')
+        log.debug(f'indicators CASH: {", ".join([f"{k:5s} {v:3.0f}" for k,v in cash_indicators.items()])}')
+        # if not good and risk_indicators['AGG'] < 0:
+            # log.debug(f'indicators RISK: {", ".join([f"{k:5s} {v:3.0f}" for k,v in risk_indicators.items()])} > {g_str}')
+            # log.debug(f'returns    RISK: {", ".join([f"{k:5s} {v:3.0f}" for k,v in profits if k in risk_assets])}')
             # log.debug(f'indicators CASH: {", ".join([f"{k:5s} {v:3.0f}" for k,v in cash_indicators.items()])}')
             # log.debug(f'returns    CASH: {", ".join([f"{k:5s} {v:3.0f}" for k,v in profits if k in strategy.cash_assets])}')
-            log.debug('risk_assets = {} '.format(risk_assets))
+            # log.debug('risk_assets = {} '.format(risk_assets))
 
-            protections.append(possible_profit)
+            # protections.append(possible_profit)
 
 
 
@@ -424,7 +422,13 @@ if __name__ == '__main__':
         else:
             asset_class = cash_indicators
 
-        best_asset = max(asset_class, key=lambda k: asset_class[k])  # in respective class
+        # best_asset = max(asset_class, key=lambda k: asset_class[k])  # in respective class
+        sorted_indicators = sorted(asset_class, key=lambda k: asset_class[k])
+        best_asset = sorted_indicators[-1]
+        # if best_asset in risk_assets:
+        # todo remove heavy dependency on last month, use decreasingly weighted exponential
+        # todo test R^2, i.e., deviation from exponential increase as measure
+            # best_asset = 'QQQ'
         if best_asset in ['LQD', 'AGG']:
             best_asset = max(cash_indicators, key=lambda k: cash_indicators[k])  # in respective class
 
@@ -522,20 +526,25 @@ if __name__ == '__main__':
     # [log.info(f'  {v}: {p}') for v, p in strategy.stop_losses]
     # strategy.plotdata.plot()
     d = strategy.plotdata
-    # d.loc[:, ['value'] + VAA_Strategy.risk_assets + VAA_Strategy.cash_assets].plot()
-    # plt.yscale('log')
+    d.loc[:, ['value'] + VAA_Strategy.risk_assets + VAA_Strategy.cash_assets].plot()
+    plt.yscale('log')
     # plt.ylim(cash_start*0.9, strategy.cash*1.1)
     log.info('time in secs {:.2f}'.format(time.time()-start_time))
     # d.loc[:, 'maxDD'].plot()
-    # plt.show()
 
-    percent_good = len([1 for p in protections if p < 0])/len(protections)*100
-    log.info(f'AGG predictions {percent_good:.0f}% GOOD')
-    log.info(f'overall_gain    {-sum(protections):.1f}%')
-    log.info(f'max_protection  {min(protections):.1f}')
-    log.info(f'max_loss        {max(protections):.1f}')
+    # percent_good = len([1 for p in protections if p < 0])/len(protections)*100
+    # log.info(f'AGG predictions {percent_good:.0f}% GOOD')
+    # log.info(f'overall_gain    {-sum(protections):.1f}%')
+    # log.info(f'max_protection  {min(protections):.1f}')
+    # log.info(f'max_loss        {max(protections):.1f}')
     # [log.debug(f' {p}') for p in protections]
-    sys.exit(0)
+
+
+
+
+
+
+    plt.show()
 
 
 
@@ -549,9 +558,10 @@ T plotting
 T freibetrag, track profit/losses
 T evaluate spoiler efficiency ignore stocks < ignoring stocks is better ...
 T test with Vanguard assets:VTI VO  VB      SHY BND TLT TIP MUB     VEU VSS VWO     VNQ DBC GLD
+T buy in last week
 
 d evaluate spoiler efficiency AGG/LQD > AGG is better 
-T buy in last week
+d second best asset is a bad idea, CAGR 17 > 11
 d taxes
 d stopp-loss > bad, months end almost always  higher ...
 d simple momentum with different lookback periods > all worse
