@@ -19,8 +19,8 @@ log = logging.getLogger()
 # _________________________________________________________________________________________________
 class DateSync():
     '''to ontrol date in all asset classes at once'''
-    def __init__(self, date:pd.Timestamp):
-        self.date = date
+    def __init__(self, date:pd.Timestamp=None):
+        self.date = date if date else pd.to_datetime('1900-01-01')
 
     @property
     def now(self):
@@ -29,10 +29,17 @@ class DateSync():
 
 # _________________________________________________________________________________________________
 class Asset():
-    def __init__(self, name:str, data:pd.DataFrame, date:DateSync):
+    def __init__(self, name:str, date:DateSync, cash:float):
         self.name = name
-        self.data = data  # panda dataframe as specified
+
+        self.data_dir = 'data'
+        self.data_file = '{}/{}.dat'.format(self.data_dir, self.name)
+        self.get_data()  # panda dataframe as specified
+
         self._date = date  # a DateSync object
+
+        self.y0 = cash - self.close
+
         self._last_bussiness_days = []
         self._positions = []
 
@@ -72,6 +79,41 @@ class Asset():
 
         return self._last_bussiness_days
 
+    def get_data(self):
+        alphavantage_key = 'HR91R8PS4P19GES7'  # flo.rieger@gmx.net
+        if not os.path.isdir(self.data_dir):  # assert data dir exists
+            os.mkdir(self.data_dir)
+
+        if not os.path.isfile(self.data_file):  # get data if not available
+            ts = TimeSeries(key=alphavantage_key, output_format='pandas')
+            # daily adjusted for "correct" values for backtesting
+            data, meta_data = ts.get_daily_adjusted(symbol=self.name, outputsize='full')
+            data.to_json(self.data_file)  # store the 
+        else:
+            log.debug(f'using available ticker-data file {self.data_file}')
+
+        self.data = pd.read_json(data_file)  # load the data
+
+        # modify column headers
+        # log.debug(f'original columns: {self.data.columns}')
+        # self.data.columns = ['_'.join(c.split()[1:]).lower() for c in self.data.columns]  # lower
+        self.data.columns = ['open', 'high', 'low', 'unadjusted_close', 'close', 'volume',
+                             'dividend_amount', 'split_coefficient']
+        # log.debug(f'renamed columns: {self.data.columns}')
+
+    def buy_position(self, amount=None, cash=None):
+        assert bool(amount) ^ bool(cash), 'need equity amount or cash for buying'  # ^ : xor
+        if cash:  # calculate amount
+            amount = self.get_amount(cash)
+
+        new_position = Position(self, amount)
+        self._positions.append(new_position)
+        log.info(f'bought position {self.name}x{amount} for total {new_position.value:.2f}')
+        return new_position.buy_costs
+
+    def get_amount(self, cash):
+        return int((cash - Position.commission)/self.close)
+
     @property
     def i_13612W(self):
         # assume only called on a last_bussiness_day
@@ -94,17 +136,19 @@ class Asset():
 
 # _________________________________________________________________________________________________
 class Position():
-    commission=6.5
+    commission = 6.5  # commission per buy/sell operation, not accumulating
     def __init__(self, asset:Asset, amount:int, commission=commission, close=True):
         self.asset = asset
         self.amount = amount
-        self.commission = commission  # commission per buy/sell operation, not accumulating
         self.buy_date = asset.today
         self.buy_price = asset.close if close else asset.open
-        # self.buy_value = self.value
         self.sell_date = None
         self.sell_price = None
-        # todo strategy/position money management; subtract commission from total money
+
+    @property
+    def buy_costs(self):
+        # total cost for buying, subtract from total cash
+        return self.value + self.commission
 
     @property
     def active(self):
@@ -112,7 +156,7 @@ class Position():
 
     @property
     def value(self):
-        return self.amount*self.asset.close
+        return self.amount * self.asset.close
 
     @property
     def profit(self):
@@ -126,28 +170,37 @@ class Position():
     def profit_percent(self):
         return self.profit/(self.buy_price * self.amount)*100
 
-    def _sell(self, close=True):
+    def sell(self):
         self.sell_date = self.asset.today
-        self.sell_price = self.asset.close if close else self.asset.open
+        self.sell_price = self.asset.close
+        log.info(f'sold position {self.name} profit {self.profit:.0f}/{self.profit_percent:.1f}%')
+        # positions return, add to total cash
+        return self.value - self.commission
 
 
 # _________________________________________________________________________________________________
 class Strategy():
     def __init__(self, cash, assets:list, date:DateSync):
-        self.assets = {a.name: a for a in assets}  # dict of Asset objects
+        self.assets = {a: Asset(a, date, cash) for a in self.assets}  # dict of Asset objects
         self._date = date  # DataSync object
         self.cash = cash
+
+        self.plotdata = None
         self.high = self.cash
         self.maxDD = 0
-        for a in assets:  # sync all assets date
-            a._date = self._date
-            a.scale = self.cash/a.close
-        self.plotdata = None
         self.stop_losses = []
         self.update_plotdata()
 
+    def update(self):
+        self.update_metrics()
+        self.update_plotdata()
+
+    def update_metrics(self):
+        self.high = max(self.value, self.high)
+        self.maxDD = max((self.high - self.value)/self.high*100, self.maxDD)
+
     def update_plotdata(self):
-        plotdata = {a.name: a.close*a.scale for a in self.assets.values()} 
+        plotdata = {a.name: a.close * a.y0 for a in self.assets.values()} 
         # plotdata.update({a.name+'_i': a.i_13612W for a in self.assets.values()})
         plotdata['value'] = self.value
         plotdata['maxDD'] = self.maxDD
@@ -196,28 +249,9 @@ class Strategy():
         # log.debug(
         return max(p.profit_percent for p in self.all_positions)
 
-    def buy_position(self, name, amount): 
-        asset = self.assets[name]
-        position = Position(asset, amount)
-        if amount * asset.data.loc[self.today].close + position.commission < self.cash:
-            asset._positions.append(position)
-            self.cash -= position.value + position.commission
-            log.info(f'bought position {position.asset.name}x{position.amount}'
-                      f' for total {position.value:.2f}')
-            return position
-        else:
-            log.warning(f'cannot buy position for {position.asset.name}')
-
-    def sell_position(self, position):  # fixme can only sell complete position
-        if isinstance(position, str):
-            positions = self.assets[position].positions
-            assert len(positions) == 1, '{} position'.format('more than one' if positions else 'no')
-            position = positions[0]
-
-        position._sell()
-        self.cash += position.value - position.commission
-        # self.cash += (position.value - position.buy_price*position.amount)*0.75 + position.buy_price*position.amount - position.commission
-        log.info(f'sold position {position.asset.name} profit {position.profit:.2f} = {position.profit_percent:.0f}%')
+    @property
+    def latest_asset(date):
+        return max(self.assets, key=lambda a: a.data.index[0])
 
     def execute(self, date):
         pass   # logic here
@@ -288,73 +322,36 @@ def read_csv(file_path):
 # _________________________________________________________________________________________________
 # _________________________________________________________________________________________________
 if __name__ == '__main__':
-    alphavantage_key = 'HR91R8PS4P19GES7'  # flo.rieger@gmx.net
 
-    data_start = pd.to_datetime('1999-01-01')
-    # data_end = pd.to_datetime('2018-04-10')
-    cash_start = 10e3
-    custom_start_date = pd.to_datetime('2014-01-01')
-    # custom_end_date = pd.to_datetime('2012-01-01')
-    try:
-        start_date = custom_start_date
+    start_cash = 10e3
+    monthly_savings = 0
+    custom_start = pd.to_datetime('2014-01-01')
+
+    date = DateSync()
+    strategy = VAA_Strategy(start_cash, date)
+
+    try:  # fails for no custom_start_date
+        earliest_start = strategy.latest_asset.index[0]
+        start_date = custom_start if custom_start > earliest_start else earliest_start
     except:
-        start_date = None
+        start_date = strategy.earliest_start
 
-    try:
-        end_date = custom_end_date
-    except:
-        end_date = None
+    # due to indicators we need more pre-data ...
+    last_bussiness_days = pd.DataFrame(index=strategy.latest_asset.last_bussiness_days)  # for bool slicing
+    last_bussiness_days = last_bussiness_days[last_bussiness_days.index > start_date]
+    last_bussiness_days = last_bussiness_days[12:]  # a year of pre-data
 
-    saving_monthly = 0
+    start_date = last_bussiness_days.index[0]
+    date.date = start_date
 
-    asset_tickers = VAA_Strategy.risk_assets + VAA_Strategy.cash_assets
     protections = []
-    date = DateSync(data_start)
-
-    # assert data files are present, else download
-    data_dir = 'data'
-    if not os.path.isdir(data_dir):
-        os.mkdir(data_dir)
-
-    assets = []
-    ts = TimeSeries(key=alphavantage_key, output_format='pandas')
-
-    for ticker_name in asset_tickers:
-        ticker_file = '{}/{}.dat'.format(data_dir, ticker_name)
-
-        if not os.path.isfile(ticker_file):  # get data if not available
-            data, meta_data = ts.get_daily_adjusted(symbol=ticker_name, outputsize='full')
-            data.to_json(ticker_file)
-        else:
-            log.debug(f'using available ticker file {ticker_file}')
-
-        asset = Asset(ticker_name, pd.read_json(ticker_file), date)  # create asset object
-        # asset.data.columns = ['_'.join(c.split()[1:]).lower() for c in asset.data.columns]  # make headers lower-case
-        # log.debug(f'original columns: {asset.data.columns}')
-        asset.data.columns = ['open', 'high', 'low', 'unadjusted_close', 'close', 'volume', 'dividend_amount', 'split_coefficient']
-        # log.debug(f'renamed columns: {asset.data.columns}')
-        assets.append(asset)
-                         
-    latest_asset = max(assets, key=lambda a: a.data.index[0])  # starts the latest
-    ultimo = pd.DataFrame(index=latest_asset.last_bussiness_days)  # for bool slicing
-    start = start_date if start_date else latest_asset.data.index[0]
-    log.debug('start = {} '.format(start))
-    end = end_date if end_date else latest_asset.data.index[-1]
-    last_bussiness_days = ultimo[ultimo.index > start]
-    latest_start = last_bussiness_days.index[12]
-    # assert latest_start < start, f'cannot start from {start.date()} but only from {latest_asset.data.index[0]}'
-    log.debug('latest_start = {} '.format(latest_start))
-    last_bussiness_days = last_bussiness_days[12:]
-    date.date = latest_start
-
-    # create strategy object
-    strategy = VAA_Strategy(cash_start, assets, date)  # start money
 
     duration = 0
-    start = None
+
+    # todo execute(start), move date thing to here
+    # todo multiple positions
 
     for idx, day in enumerate(last_bussiness_days.index):
-        start = day if not start else start
 
         if end_date and day > end_date:
             break
@@ -444,12 +441,9 @@ if __name__ == '__main__':
         if not strategy.positions:  # either we're still in the best position or sold the old one
             amount = int((strategy.cash-Position.commission)/strategy.assets[best_asset].close)
             # if not best_asset in ['SHY']:
-            strategy.buy_position(best_asset, amount)
+            strategy.buy_position(best_asset, get_amount(strategy.assets[best_asset], strategy.cash))
 
-        strategy.high = max(strategy.value, strategy.high)
-        strategy.maxDD = max((strategy.high - strategy.value)/strategy.high*100, strategy.maxDD)
-
-        strategy.update_plotdata()
+        strategy.update()
         # if idx > 3:
             # sys.exit(0)
             # strategy.plotdata
@@ -506,7 +500,7 @@ if __name__ == '__main__':
     log.info(f'risk           {", ".join(strategy.risk_assets)}')
     log.info(f'cash           {", ".join(strategy.cash_assets)}')
     log.info('----------------------------------------------------')
-    log.info(f'start value    {cash_start:.0f} {start.date()}')
+    log.info(f'start value    {cash_start:.0f} {start_date.date()}')
     log.info(f'final value    {cash_end:.0f} {(cash_end/cash_start-1)*100:+.0f}%')
     log.info('----------------------------------------------------')
     log.info(f'CAGR           {CAGR:.2f}%')
