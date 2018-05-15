@@ -320,7 +320,6 @@ def read_csv(file_path):
     return pd.read_csv(file_path, index_col=0, usecols=[0, 1, 2, 3, 4], parse_dates=True)
 
 # _________________________________________________________________________________________________
-# _________________________________________________________________________________________________
 if __name__ == '__main__':
 
     start_cash = 10e3
@@ -349,15 +348,11 @@ if __name__ == '__main__':
     duration = 0
 
     # todo execute(start), move date thing to here
-    # todo multiple positions
 
     for idx, day in enumerate(last_bussiness_days.index):
-
-        if end_date and day > end_date:
-            break
         log.debug('_'*100)
         log.debug(f'last trading day: {day}')
-        # strategy.status(log.debug)
+
         date.date = day  # update all dates
 
         # log.info(f'savings: {saving_monthly}')
@@ -377,7 +372,6 @@ if __name__ == '__main__':
             cash_indicators = {strategy.assets[a].name: strategy.assets[a].i_momentum(3)
                                for a in strategy.cash_assets}
 
-        bad_indicator = {key:i for key, i in risk_indicators.items() if i < 0.0}
         bad_indicator = {key:i for key, i in risk_indicators.items() if i < 0.0 and not key in strategy.ignore_indicator}
         good = not bad_indicator
         g_str = 'good' if good else f'bad {tuple(bad_indicator.keys())}'
